@@ -25,13 +25,16 @@ export function CourseMap() {
           trace you will need on a Tuesday.
         </p>
         <p>
-          Northline is six production briefs and a design review. Each one asks you to choose
+          Northline is a set of production briefs and a design review. Each one asks you to choose
           under constraints that do not bend. The feedback names what breaks: a latency ceiling,
-          a citation that points at the wrong year, a refund that can fire twice.
+          a citation that points at the wrong year, a refund that can fire twice, a cluster
+          stood up for eight requests in flight.
         </p>
       </div>
       <ol className="mt-8 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-        {briefs.slice(0, 6).map((brief) => (
+        {briefs
+          .filter((brief) => brief.interaction !== "review")
+          .map((brief) => (
           <li key={brief.slug}>
             <Link
               href={`/brief/${brief.slug}`}

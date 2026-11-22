@@ -4,7 +4,7 @@ A field course in applied AI system design.
 
 The model is one stage. Northline is the system around it: a latency and cost budget, retrieval you can cite, a context window you refuse to fill, a workflow that keeps side effects in code, an eval gate that matches the harm, and the trace you need when answers get worse on a Tuesday.
 
-You work six production briefs and a design review. Each brief states a product and constraints that do not bend. You choose a design. The course tells you what holds and what breaks, with the numbers from the brief.
+You work the briefs in order if you can. Each brief states a product and constraints that do not bend. You choose a design. The course tells you what holds and what breaks, with the numbers from the brief.
 
 Progress stays in this browser (`localStorage`). There is no account and no backend.
 
@@ -25,7 +25,8 @@ Open [http://localhost:3000](http://localhost:3000).
 4. **Control** — refund an order. One judgment inside a workflow. The model does not move money.
 5. **Evals** — invoice totals that get booked. The gate is the slice that can lose money, not the average.
 6. **Operate** — thumbs-down doubles at 14:10. Slice, diff retrieval, version the corpus.
-7. **Design review** — inbox triage. Put the four decisions into one design note.
+7. **Traffic** — in-flight concurrency, and when that number is a queue, two replicas, serverless, or a cluster.
+8. **Design review** — inbox triage. Put the four decisions into one design note.
 
 Planning figures in the briefs are allowances for the exercise, not measured benchmarks.
 

@@ -45,7 +45,7 @@ export type Brief = {
   situation: string[]
   stagesCaption: string
   stages: Stage[]
-  exhibit?: "traces"
+  exhibit?: "traces" | "traffic"
   interaction: "choices" | "context" | "incident" | "review"
   questions: Question[]
   principle: string
@@ -454,6 +454,46 @@ export const incidentSteps: IncidentStep[] = [
     ],
   },
 ]
+
+export type TrafficCase = {
+  id: string
+  name: string
+  arrival: string
+  rps: number
+  seconds: number
+  waiting: string
+}
+
+export const trafficCases: TrafficCase[] = [
+  {
+    id: "policy",
+    name: "Policy assistant, at the spike",
+    arrival: "4 requests a second, for longer than a request takes",
+    rps: 4,
+    seconds: 2,
+    waiting: "A person is waiting",
+  },
+  {
+    id: "inbox",
+    name: "Inbox drafts, during a burst",
+    arrival: "2 emails a second for a few minutes",
+    rps: 2,
+    seconds: 4,
+    waiting: "Nobody is waiting",
+  },
+  {
+    id: "public",
+    name: "Public assistant, steady",
+    arrival: "80 requests a second through the business day",
+    rps: 80,
+    seconds: 6,
+    waiting: "A person is waiting",
+  },
+]
+
+export function inFlight(rps: number, seconds: number): number {
+  return rps * seconds
+}
 
 export const reviewSynthesis =
   "This holds. The draft is produced before anyone is waiting, the context is an allowlist, money stays behind a person and a code check, and the gate is the slice that can lose money rather than the average of the easy mail. Auto-send can come later, for intents whose worst case is tone, and only after a shadow week. It is not the first release."
@@ -1251,8 +1291,249 @@ export const briefs: Brief[] = [
       "The model did not change. The index grew a second opinion and kept both. You find that by slicing the symptom to a document, then diffing retrieval on queries you stored, not by restarting a service or editing a prompt. The fix is a version swap in one commit and a cache key that includes the version. The page, next time, is a pinned query that expects a clause hash, plus a downvote rate that can fire for a single document.",
   },
   {
-    slug: "review",
+    slug: "traffic",
     number: "07",
+    title: "Traffic",
+    question: "Given the requests in flight, what is actually balancing the load?",
+    minutes: 10,
+    product: "Three products, three arrival rates",
+    constraints: [
+      { label: "Measure", value: "In-flight, not RPS" },
+      { label: "Formula", value: "Rate × time held" },
+      { label: "Waiting", value: "Sync or not" },
+      { label: "Cap", value: "Fail fast when full" },
+    ],
+    situation: [
+      "Hits per second is not an architecture. A 4-per-second policy question that holds a worker for 2 seconds is 8 requests in flight. Eighty requests a second that each hold a worker for 6 seconds is 480. The second number is a fleet. The first is two processes. Serverless, a queue, a couple of containers, and Kubernetes are answers to different products, and the load balancer is only one of the ways load gets balanced.",
+      "The product of rate and hold-time is the average concurrency while that rate lasts longer than one request. A burst shorter than the hold time piles up closer to “how many arrived,” not the product. These are planning figures, the same kind as the latency allowances. They are here so a platform choice can fail in public.",
+    ],
+    stagesCaption:
+      "The path once you have more than one replica. Most products never reach the last stages, and that is a successful design.",
+    stages: [
+      {
+        id: "count",
+        name: "Count in-flight",
+        input: "Arrival rate and how long one request occupies a worker.",
+        output: "Concurrency. Rate times seconds held, while the rate lasts.",
+        failure: "Picking Kubernetes, or serverless, from a hits-per-second slide that never mentions duration.",
+        metric: "In-flight requests per replica, next to the cap.",
+      },
+      {
+        id: "edge",
+        name: "Terminate TLS",
+        input: "Connections from clients.",
+        output: "HTTP to the balancer. Certificate and protocol stay at the edge.",
+        failure: "Making every model replica renew its own public certificate.",
+        metric: "Handshake errors. They are not model failures.",
+      },
+      {
+        id: "l7",
+        name: "Balance at HTTP",
+        input: "A request, not a packet.",
+        output: "One replica that is ready and under its cap. An L7 proxy can see the request. An L4 proxy can only see the connection.",
+        failure: "Balancing multi-second model calls as if they were 5-millisecond reads.",
+        metric: "Connections, or in-flight requests, per replica. They should not fan out.",
+      },
+      {
+        id: "ready",
+        name: "Readiness",
+        input: "A replica that has loaded, or has not.",
+        output: "The balancer sends nothing until the replica says it can take a request.",
+        failure: "A liveness probe that restarts a slow model, and a readiness probe that always passes.",
+        metric: "Requests that landed on a replica still loading. The count should be zero.",
+      },
+      {
+        id: "cap",
+        name: "Cap the replica",
+        input: "How many generations one process, or one GPU, can actually hold.",
+        output: "A hard in-flight limit. Extra requests do not enter.",
+        failure: "Scaling on CPU while the process is blocked on the model and looks idle.",
+        metric: "In-flight against the cap. Saturation is the cap, not 70% CPU.",
+      },
+      {
+        id: "shed",
+        name: "Shed load",
+        input: "Every replica at its cap.",
+        output: "A fast 429. The caller retries with backoff, or the product shows nothing.",
+        failure: "An unbounded queue inside the proxy. The p95 becomes the depth of that queue.",
+        metric: "429 rate, and how old the oldest accepted request is.",
+      },
+    ],
+    exhibit: "traffic",
+    interaction: "choices",
+    questions: [
+      {
+        id: "traffic.policy",
+        prompt: "Policy assistant. Four requests a second, each held for 2 seconds. Someone is waiting, and the allowance is about 2.5 seconds. What do you run?",
+        detail:
+          "In flight at that spike: 4 × 2 = 8. No GPU. The process is stateless. The spike lasts minutes, not milliseconds.",
+        options: [
+          {
+            id: "pair",
+            title: "Two replicas behind an HTTP load balancer",
+            summary:
+              "A small always-on container service. Each replica caps at 6 in flight. Readiness stays false until the process can take a call.",
+            holds: true,
+            feedback:
+              "Eight in flight fits two replicas with room for one of them to die. The balancer’s job is small: TLS, health, and not sending a seventh call to a replica that already holds six. You are not operating a cluster. A managed container service, or two VMs, is the whole platform. Kubernetes would also serve this, and you would be maintaining a scheduler for a concurrency of eight.",
+          },
+          {
+            id: "serverless",
+            title: "Serverless, scale to zero",
+            summary: "One invocation per question. No replicas to patch. Pay for the spike only.",
+            holds: false,
+            feedback:
+              "The rate is small enough that the bill and the concurrency cap are fine. The latency allowance is not. A cold start of a second or two is the same size as the budget, and it lands on the first person who asks after a quiet hour. Scale-to-zero is a good shape when nobody is counting seconds. This product is counting seconds. Keep one warm replica, or two, and the cold start leaves the design.",
+          },
+          {
+            id: "cluster",
+            title: "Kubernetes, autoscaled on CPU",
+            summary: "A cluster, three nodes, HPA, ingress, the platform you expect to need later.",
+            holds: false,
+            feedback:
+              "The cluster can hold eight requests. So can a process. What you added is upgrades, networking, and a scaling signal that does not match the work: a model call waits on the network more than it burns CPU, so CPU autoscaling stays asleep while in-flight is the thing that is full. Take Kubernetes when the replica count, the GPUs, or the number of services make a scheduler cheaper than the alternative. Eight in flight is not that day.",
+          },
+          {
+            id: "queue",
+            title: "A queue, and workers that catch up",
+            summary: "Accept the question, return immediately, generate on a worker, deliver the answer later.",
+            holds: false,
+            feedback:
+              "A queue balances load by letting lag grow, which is the right trade when the email already arrived and the draft can wait. Here a person asked a question and is looking at the screen. You changed the product into an asynchronous one to avoid running two replicas. The load was never the problem.",
+          },
+        ],
+      },
+      {
+        id: "traffic.inbox",
+        prompt: "Inbox drafts. A burst of 2 emails a second, 4 seconds of model time each. Nobody is waiting. What balances it?",
+        detail:
+          "Keeping up with the burst, with no lag, would mean 2 × 4 = 8 drafts in flight. Falling behind is allowed. The morning’s mail can still be there at lunch. It cannot still be there next week.",
+        options: [
+          {
+            id: "workers",
+            title: "A queue and a capped worker pool",
+            summary:
+              "Arrivals go on a queue. A handful of workers pull. Each worker holds one draft at a time. Depth and age are the page.",
+            holds: true,
+            feedback:
+              "The queue is the load balancer. Producers and consumers do not have to match in the second the burst arrives. Eight in flight would keep the queue from growing; fewer workers let it grow and then drain, which is acceptable because opening the inbox is a read of whatever draft is already stored. Bound the retries, or a poison email will occupy a worker forever. Page on the age of the oldest message, not on requests per second, which will look quiet while the backlog rots.",
+          },
+          {
+            id: "serverless",
+            title: "One serverless invocation per email",
+            summary:
+              "The arrival invokes a function. Concurrency is capped. A failed invocation retries with backoff. Nobody is held on a socket.",
+            holds: true,
+            feedback:
+              "This also holds. Four seconds is well inside a function timeout, cold start does not matter because no one is watching the spinner, and 2 a second is nowhere near a concurrency ceiling. You still need the cap and the retry, which a queue gives you as the product and a function platform gives you as settings. Prefer the queue when you want to see the backlog as a number you own. Prefer the function when you do not want a worker process on the quiet days. Neither answer is a cluster.",
+          },
+          {
+            id: "on-open",
+            title: "Generate when someone opens the email",
+            summary: "Skip the precompute. The open path calls the model, behind a load balancer, p95 of a few seconds.",
+            holds: false,
+            feedback:
+              "You moved the burst onto the click. A campaign that dumps a few hundred mails, and then a person who opens ten of them, is a synchronous fan-out you did not budget. The earlier design review already put this work on arrival for a product reason. The traffic reason is the same: the expensive second is not the second anyone is waiting.",
+          },
+          {
+            id: "cluster",
+            title: "Kubernetes, because email is production",
+            summary: "Ingress, a deployment, HPA on CPU, a cluster for a job that runs a few times a second.",
+            holds: false,
+            feedback:
+              "Production is not a synonym for Kubernetes. The burst is eight in flight if you refuse to lag, and less if you allow it. A queue and a couple of workers have a failure mode you can draw. A cluster has a failure mode you hire for. Add it when the workers need GPUs, placement, or a count you can no longer run by hand.",
+          },
+        ],
+      },
+      {
+        id: "traffic.public",
+        prompt: "Public assistant. 80 requests a second, each held for 6 seconds, and the person is waiting. What do you run?",
+        detail:
+          "In flight: 80 × 6 = 480. The allowance for a reply is 8 seconds, so you cannot hide a long queue inside the wait. The model is either a GPU you run or an API with a concurrency quota. Both are a cap.",
+        options: [
+          {
+            id: "serverless",
+            title: "Serverless at 480 concurrent executions",
+            summary: "The platform scales out. You set the memory and the timeout and leave it.",
+            holds: false,
+            feedback:
+              "Four hundred and eighty concurrent 6-second calls is a fleet whether or not you call it one. Default concurrency caps sit well below that, cold starts thrash exactly when you are busiest, and a 6-second function at this rate is a bill with no backpressure: the platform will queue or time out inside its own proxy, which is a load balancer you cannot see and did not put a cap on. Serverless fits the inbox burst. It does not fit a steady 480.",
+          },
+          {
+            id: "single",
+            title: "One large machine",
+            summary: "A big VM, no balancer. Vertical scale until 480 fits.",
+            holds: false,
+            feedback:
+              "A single process is a single failure, and 480 long requests will not share it politely. A deploy drops every call. A health check has nothing else to send people to. Vertical scale has a last size. You are past the size where one machine is the design rather than a risk you wrote down.",
+          },
+          {
+            id: "fleet",
+            title: "A fleet, scaled on in-flight, behind an HTTP balancer",
+            summary:
+              "Many replicas. Each has a hard cap. The balancer sends only to ready replicas under the cap. Autoscaling watches in-flight, not CPU. Past the cap, the edge returns 429.",
+            holds: true,
+            feedback:
+              "This is the point where a scheduler earns its keep. Kubernetes fits if you are already going to operate the GPUs, the node pools, and the disruption budgets. A managed container platform fits if it can do the same three things: a cap per replica, scale on that cap, and refuse work when the fleet is full. CPU autoscaling will not, because a replica blocked on a GPU or on a model API looks idle while it is holding its maximum. The 429 is part of the product. An 8-second allowance cannot absorb an invisible queue of hundreds.",
+          },
+          {
+            id: "unbounded",
+            title: "An unbounded queue in front of a fixed pool",
+            summary: "Accept every request. Workers drain as fast as they can. The client waits on the socket.",
+            holds: false,
+            feedback:
+              "A short bounded queue is a shock absorber: a few seconds of burst, then a 429. An unbounded one turns 80 per second into a wait that grows without a ceiling, and the person who is waiting is now waiting on the depth, not on the model. You balanced the load by making the p95 whatever the backlog is. If the product can become asynchronous, say so and design the notification. Do not get there by accident.",
+          },
+        ],
+      },
+      {
+        id: "traffic.balancer",
+        prompt: "The public assistant has many replicas. How should the balancer spread a 6-second call?",
+        options: [
+          {
+            id: "round",
+            title: "Round robin",
+            summary: "Each new request goes to the next replica, in order.",
+            holds: false,
+            feedback:
+              "Round robin is fair when every request costs the same and finishes quickly. These do not. A replica in the middle of several long generations keeps receiving new ones because the algorithm cannot see the work it already handed out. Tail latency becomes whichever replica drew the unlucky streak. Least-connections exists for this shape.",
+          },
+          {
+            id: "least",
+            title: "Least in-flight, then a hard stop",
+            summary:
+              "Send to the ready replica holding the fewest calls. Never exceed the cap. When all are full, 429 at the edge. No sticky cookie.",
+            holds: true,
+            feedback:
+              "The balancer is accounting, not a shuffle. In-flight is the load. Readiness keeps a replica that is still loading the model out of the pool. The cap is what stops a retry storm from turning one slow replica into a pileup. Sticky sessions would pin a heavy user to one replica and leave the others idle, and the pin breaks the moment that replica dies. These calls are stateless. The conversation state, if you have it, lives in a store, not in the process the balancer remembers.",
+          },
+          {
+            id: "sticky",
+            title: "Sticky sessions, so the replica remembers the user",
+            summary: "A cookie pins each person to a replica. The pin avoids fetching their context twice.",
+            holds: false,
+            feedback:
+              "You hid a cache inside a process and then asked the balancer to preserve the accident. A popular user, or a retrying client, heats one replica while the fleet looks underused. When you deploy, every pin breaks and the cache was never real. Put the context in a store the whole fleet can read. Let any ready replica take the next call.",
+          },
+          {
+            id: "probe",
+            title: "Health-check by running a real generation",
+            summary: "Every few seconds, each replica answers a canned prompt. Failure pulls it out of rotation.",
+            holds: false,
+            feedback:
+              "You spent the scarce resource on the probe. A 6-second generation, on a timer, on every replica, is a permanent tax, and a slow probe looks like a dead replica, so the balancer removes capacity exactly when the model is busy. Readiness should be cheap: the process is up, the model is loaded, the in-flight count is below the cap. Depend on the real requests, and their errors, to tell you the generation path is sick.",
+          },
+        ],
+      },
+    ],
+    principle:
+      "Balance the requests in flight. Serverless, a queue, a few replicas, or a cluster are what that number and the wait will pay for.",
+    principleDetail:
+      "Hits per second does not choose the platform. Rate times how long a request occupies a worker is the concurrency you have to hold, and only while someone is actually waiting does that concurrency have to be there now. A queue balances load by allowing lag. A load balancer balances load by picking a ready replica that is under its cap, and by refusing the rest quickly. Kubernetes is the right bill when many replicas, GPUs, or many services need a scheduler. It is an expensive way to run eight requests.",
+  },
+  {
+    slug: "review",
+    number: "08",
     title: "Design review",
     question: "Can you keep the budget, the context, the side effects, and the gate in one design?",
     minutes: 10,

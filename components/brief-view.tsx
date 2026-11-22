@@ -10,6 +10,7 @@ import { IncidentLadder } from "@/components/incident-ladder"
 import { useProgress } from "@/components/progress-provider"
 import { RetrievalExhibit } from "@/components/retrieval-exhibit"
 import { StagePath } from "@/components/stage-path"
+import { TrafficExhibit } from "@/components/traffic-exhibit"
 import { buttonVariants } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
@@ -50,6 +51,7 @@ export function BriefView({ slug }: { slug: string }) {
       </div>
       <StagePath stages={brief.stages} caption={brief.stagesCaption} />
       {brief.exhibit === "traces" ? <RetrievalExhibit /> : null}
+      {brief.exhibit === "traffic" ? <TrafficExhibit /> : null}
       {brief.questions.map((question) => (
         <ChoiceGroup key={question.id} question={question} />
       ))}
